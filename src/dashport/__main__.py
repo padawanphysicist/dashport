@@ -55,6 +55,32 @@ def flatten_deep(nested_list):
             flat.append(item)
     return flat
 
+def extract_resource_ids(dashboard):
+    """Extract unique database, table, and field IDs from dashboard."""
+    database_ids = set()
+    table_ids = set()
+    field_ids = set()
+
+    dashcards = dashboard.get('dashcards', [])
+    for dashcard in dashcards:
+        card = dashcard.get('card', {})
+
+        # Extract database_id
+        if card.get('database_id'):
+            database_ids.add(card['database_id'])
+
+        # Extract table_id
+        if card.get('table_id'):
+            table_ids.add(card['table_id'])
+
+        # Extract field IDs from result_metadata
+        result_metadata = card.get('result_metadata', [])
+        for metadata in result_metadata:
+            if metadata.get('id'):
+                field_ids.add(metadata['id'])
+
+    return sorted(list(database_ids)), sorted(list(table_ids)), sorted(list(field_ids))
+
 def main():
     args = docopt(__doc__, version='0.1')
 
@@ -73,6 +99,11 @@ def main():
         collections = find_collections(dashboard)
         questions = sorted(list(map(int, flatten_deep([find_questions(url, token, c) for c in collections]))))
 
+        ########################################
+        # Extrai IDs de recursos do dashboard #
+        ########################################
+        databases, tables, fields = extract_resource_ids(dashboard)
+
         ############################################
         # Construção do payload final para o cache #
         ############################################
@@ -80,6 +111,9 @@ def main():
             "dashboard": dashboard,
             "collections": collections,
             "questions": questions,
+            "databases": databases,
+            "tables": tables,
+            "fields": fields,
         }
         try:
             json.dump(payload, sys.stdout, indent=4)

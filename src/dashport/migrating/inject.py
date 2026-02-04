@@ -9,6 +9,72 @@ def inject_dashboard(dashboard, url, token, dashboard_id, dry_run):
     if dry_run:
         logger.info("DRY RUN")
 
+    ####################################################
+    # 1. Obtém todos os cartões do dashboard de origem #
+    ####################################################
+    cards = dashboard.get("dashcards", [])
+    #logger.info(f"cards {cards}")
+
+#     #################################################
+#     # 2. Lê os mapeamentos de IDs (origem, destino) #
+#     #################################################
+#     logger.info(
+#         f"Obtendo IDs de questions a serem processadas do arquivo {csv_file}..."
+#     )
+#     question_id_dict = dict()
+#     try:
+#         with open(csv_file, "r") as f:
+#             reader = csv.reader(f)
+#             for row in reader:
+#                 if len(row) >= 2 and row[0].strip() and row[1].strip():
+#                     orig_card_id, dest_card_id = list(
+#                         map(lambda x: int(x.strip()), row)
+#                     )
+#                     question_id_dict[orig_card_id] = dest_card_id
+#         logger.info(
+#             f"Foram identificadas {len(question_id_dict.keys())} questions a serem processadas"
+#         )
+#     except Exception as e:
+#         logger.error(f"Erro ao obter o mapeamento de questions de {csv_file}: {e}")
+
+    ################################################################
+    # 3. Valida se todas as questions do dashboard estão mapeadas #
+    ################################################################
+    logger.info("Validando mapeamento de questions...")
+    missing_questions = []
+    for card_orig in cards:
+        if card_orig["card_id"] is not None:
+            if card_orig["card_id"] not in question_id_dict:
+                missing_questions.append(card_orig["card_id"])
+
+    if missing_questions:
+        logger.error(
+            f"ERRO: {len(missing_questions)} question(s) do dashboard não estão mapeadas no CSV:"
+        )
+        for qid in missing_questions:
+            logger.error(f"  - Question ID: {qid}")
+        logger.error(f"\nPara corrigir, adicione as seguintes linhas ao arquivo {csv_file}:")
+        for qid in missing_questions:
+            logger.error(f"  {qid},<dest_question_id>")
+        logger.error(f"\nOu use o comando 'map_question' para encontrar o mapeamento automaticamente:")
+        for qid in missing_questions:
+            logger.error(
+                f"  dashport map_question --url-orig=<orig> --url-dest=<dest> "
+                f"--token-orig=<tok_orig> --token-dest=<tok_dest> --question-id={qid}"
+            )
+
+        if not skip_unmapped:
+            logger.error("\nAbortando migração. Use --skip-unmapped para pular questions não mapeadas.")
+            return
+        else:
+            logger.warning(
+                f"\nContinuando com --skip-unmapped: {len(missing_questions)} question(s) serão puladas."
+            )
+    else:
+        logger.info("✓ Todas as questions do dashboard estão mapeadas no CSV")
+
+
+
     ##################################################
     # 6. Sobe o payload para a instância de destino #
     ##################################################
