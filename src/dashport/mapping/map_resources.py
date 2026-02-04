@@ -44,6 +44,108 @@ def fetch_table_metadata(url, token, table_id):
     response.raise_for_status()
     return response.json()
 
+def fetch_collections(url, token):
+    """Fetch all collections from Metabase."""
+    headers = {"X-API-KEY": token}
+    response = requests.get(
+        f"{url}/api/collection",
+        headers=headers,
+        timeout=settings.REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    return response.json()
+
+def fetch_questions_from_collection(url, token, collection_id):
+    """Fetch all questions/cards from a specific collection."""
+    headers = {"X-API-KEY": token}
+    response = requests.get(
+        f"{url}/api/collection/{collection_id}/items",
+        headers=headers,
+        params={"models": "card"},
+        timeout=settings.REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    data = response.json()
+    # Filter only cards/questions
+    return [item for item in data.get('data', []) if item.get('model') == 'card']
+
+
+def map_collections(src_collection_ids, dest_collections):
+    """
+    Map source collection IDs to destination collections.
+
+    This function is encapsulated - you can replace it with custom logic.
+
+    Args:
+        src_collection_ids: List of source collection IDs
+        dest_collections: List of destination collection objects
+
+    Returns:
+        Dict mapping src_id to {src_id, dest_id, name}
+    """
+    mapping = {}
+    dest_by_name = {c['name']: c for c in dest_collections}
+
+    for src_id in src_collection_ids:
+        # Simple strategy: match by ID first, then by name
+        dest_collection = None
+
+        # Try to find by same ID
+        for c in dest_collections:
+            if c['id'] == src_id:
+                dest_collection = c
+                break
+
+        # If not found and we only have one collection, use it
+        if not dest_collection and len(dest_collections) == 1:
+            dest_collection = dest_collections[0]
+
+        if dest_collection:
+            mapping[src_id] = {
+                "src_id": src_id,
+                "dest_id": dest_collection['id'],
+                "name": dest_collection['name']
+            }
+
+    return mapping
+
+
+def map_questions(src_question_ids, dest_questions):
+    """
+    Map source question IDs to destination questions.
+
+    This function is encapsulated - you can replace it with custom logic.
+
+    Args:
+        src_question_ids: List of source question/card IDs
+        dest_questions: List of destination question objects
+
+    Returns:
+        Dict mapping src_id to {src_id, dest_id, name}
+    """
+    mapping = {}
+    dest_by_name = {q['name']: q for q in dest_questions}
+    dest_by_id = {q['id']: q for q in dest_questions}
+
+    for src_id in src_question_ids:
+        dest_question = None
+
+        # Strategy 1: Try to find by same ID
+        if src_id in dest_by_id:
+            dest_question = dest_by_id[src_id]
+
+        # Strategy 2: If not found, could add name matching here
+        # This is left simple for now - can be customized
+
+        if dest_question:
+            mapping[src_id] = {
+                "src_id": src_id,
+                "dest_id": dest_question['id'],
+                "name": dest_question['name']
+            }
+
+    return mapping
+
 
 def map_resources(url, token, cache_file):
     """
@@ -67,7 +169,9 @@ def map_resources(url, token, cache_file):
     mapping = {
         "databases": {},
         "tables": {},
-        "fields": {}
+        "fields": {},
+        "collections": {},
+        "questions": {}
     }
 
     # Fetch destination resources
@@ -219,6 +323,66 @@ def map_resources(url, token, cache_file):
             logger.info(f"✓ Field {src_field_id} → {dest_field['id']} ({dest_field['name']})")
         else:
             logger.warning(f"⚠ Field {src_field_id} not found in destination")
+
+    # Map collections
+    logger.info("\n--- Mapping Collections ---")
+    src_collection_ids = cache.get('collections', [])
+
+    try:
+        dest_collections = fetch_collections(url, token)
+        logger.info(f"Fetched {len(dest_collections)} collections from destination")
+
+        # Use encapsulated mapping function
+        collection_mappings = map_collections(src_collection_ids, dest_collections)
+        mapping['collections'] = collection_mappings
+
+        for src_id, coll_info in collection_mappings.items():
+            logger.info(f"✓ Collection {src_id} → {coll_info['dest_id']} ({coll_info['name']})")
+
+        # Warn about unmapped collections
+        for src_id in src_collection_ids:
+            if src_id not in collection_mappings:
+                logger.warning(f"⚠ Collection {src_id} not found in destination")
+    except Exception as e:
+        logger.error(f"Error mapping collections: {e}")
+
+    # Map questions
+    logger.info("\n--- Mapping Questions ---")
+    src_question_ids = cache.get('questions', [])
+
+    try:
+        # Fetch all questions from mapped collections
+        all_dest_questions = []
+        for coll_id, coll_info in mapping['collections'].items():
+            dest_coll_id = coll_info['dest_id']
+            try:
+                questions = fetch_questions_from_collection(url, token, dest_coll_id)
+                all_dest_questions.extend(questions)
+                logger.info(f"  Fetched {len(questions)} questions from collection {dest_coll_id}")
+            except Exception as e:
+                logger.warning(f"  Error fetching questions from collection {dest_coll_id}: {e}")
+
+        logger.info(f"Total questions in destination: {len(all_dest_questions)}")
+
+        # Use encapsulated mapping function
+        question_mappings = map_questions(src_question_ids, all_dest_questions)
+        mapping['questions'] = question_mappings
+
+        for src_id, q_info in question_mappings.items():
+            logger.info(f"✓ Question {src_id} → {q_info['dest_id']} ({q_info['name']})")
+
+        # Warn about unmapped questions
+        unmapped_count = 0
+        for src_id in src_question_ids:
+            if src_id not in question_mappings:
+                logger.warning(f"⚠ Question {src_id} not found in destination")
+                unmapped_count += 1
+
+        if unmapped_count > 0:
+            logger.warning(f"\n⚠ {unmapped_count}/{len(src_question_ids)} questions could not be mapped")
+            logger.warning("You may need to implement custom matching logic in map_questions()")
+    except Exception as e:
+        logger.error(f"Error mapping questions: {e}")
 
     # Output mapping to stdout
     logger.info("\n" + "=" * 80)
